@@ -6,6 +6,7 @@ fn main() {
     //initialization of the built-in commands
     let mut commands: HashMap<&str, fn(&[&str])> = HashMap::new();
     commands.insert("exit", exit_command);
+    commands.insert("echo", echo_command);
 
     loop 
     {
@@ -15,15 +16,26 @@ fn main() {
         let mut input= String::new();
         io::stdin().read_line(&mut input).unwrap();
 
-        if let Some(f) = commands.get(input.trim()) {     //the read_line method includes the newline character in the input, so we use trim() to remove it
-            f(&[]);
-        } else {
-            println!("{}: command not found", input.trim());            //the read_line method includes the newline character in the input, so we use trim() to remove it before printing the error message
+        let words: Vec<&str> = input.split_whitespace().collect();
+
+        let Some((name, args)) = words.split_first() 
+        else {
+            continue; //if no command is entered, continue to the next iteration of the loop
+        };
+
+        match commands.get(*name) {
+            Some(f) => f(args),
+            None => println!("{}: command not found", name),
         }
     }
 }
 
-fn exit_command(_args: &[&str]) 
+fn exit_command(args: &[&str])
 {
     std::process::exit(0);
+}
+
+fn echo_command(args: &[&str]) 
+{
+    println!("{}",args.join(" "));
 }
