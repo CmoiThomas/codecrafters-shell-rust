@@ -2,12 +2,16 @@
 use std::io::{self, Write};
 use std::collections::HashMap;
 
+const BUILTINS: &[(&str, fn(&[&str]))] = &[
+    ("exit", exit_command),
+    ("echo", echo_command),
+    ("type", type_command),
+];
+
 fn main() {
     //initialization of the built-in commands
-    let mut commands: HashMap<&str, fn(&[&str])> = HashMap::new();
-    commands.insert("exit", exit_command);
-    commands.insert("echo", echo_command);
-
+    let commands: HashMap<&str, fn(&[&str])> = BUILTINS.iter().copied().collect();
+    
     loop 
     {
         print!("$ ");
@@ -38,4 +42,14 @@ fn exit_command(args: &[&str])
 fn echo_command(args: &[&str]) 
 {
     println!("{}",args.join(" "));
+}
+
+fn type_command(args: &[&str]) 
+{
+    let Some(name) = args.first() else { return };
+    if BUILTINS.iter().any(|(n, _)| n == name) {
+        println!("{name} is a shell builtin");
+    } else {
+        println!("{name}: not found");
+    }
 }
