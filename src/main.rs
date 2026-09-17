@@ -56,7 +56,8 @@ fn pwd_command(args: &[&str])
 
 fn cd_command(args: &[&str]) 
 {
-    let Some(path) = args.first() else { return };
+    let raw = args.first().copied().unwrap_or("~");
+    let path = raw.replacen('~', &env::var("HOME").unwrap_or_default(), 1);
 
     if env::set_current_dir(path).is_err() {
     println!("cd: {path}: No such file or directory");
