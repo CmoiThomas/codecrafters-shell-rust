@@ -58,8 +58,8 @@ fn cd_command(args: &[&str])
 {
     let Some(path) = args.first() else { return };
 
-    if let Err(e) = env::set_current_dir(path) {
-        println!("cd: {}: {}", path, e);
+    if env::set_current_dir(path).is_err() {
+    println!("cd: {path}: No such file or directory");
     }
 }
 
