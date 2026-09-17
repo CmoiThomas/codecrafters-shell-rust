@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const BUILTINS: &[(&str, fn(&[&str]))] = &[
     ("exit", exit_command),
@@ -56,13 +57,12 @@ fn type_command(args: &[&str])
         println!("{name} is {}", path.display());                               //if not, check if the command is in the PATH
     } else {
         println!("{name}: not found");                                          //if the command do not exists
-    }
-    
+    }  
 }
 
 //check if a file is executable 
-//use in find_in_path
-//CODECRAFTER USE A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TEST
+//use in find_in_path()
+//CODECRAFTER USE A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TESTS AND GO TO THE NEXT STEP
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -77,10 +77,17 @@ fn is_executable(p: &Path) -> bool {
 }
 
 //check if the file specified by "name" exists
-//use in type_command
+//use in type_command()
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path = env::var("PATH").ok()?;
     env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|p| is_executable(p))
+}
+
+fn run_external(name: &str, args: &[&str]) {
+    match Command::new(name).args(args).status() {
+        Ok(_) => {}
+        Err(_) => println!("{}: command not found", name),
+    }
 }
