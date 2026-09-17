@@ -32,7 +32,7 @@ fn main() {
 
         match commands.get(*name) {
             Some(f) => f(args),
-            None => println!("{}: command not found", name),
+            None => run_external(name, args),
         }
     }
 }
