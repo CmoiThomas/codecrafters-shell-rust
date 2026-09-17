@@ -9,6 +9,7 @@ const BUILTINS: &[(&str, fn(&[&str]))] = &[
     ("exit", exit_command),
     ("echo", echo_command),
     ("type", type_command),
+    ("pwd", pwd_command),
 ];
 
 fn main() {
@@ -45,6 +46,11 @@ fn exit_command(args: &[&str])
 fn echo_command(args: &[&str]) 
 {
     println!("{}",args.join(" "));
+}
+
+fn pwd_command(args: &[&str]) 
+{
+    println!("{}", env::current_dir().unwrap().display());
 }
 
 fn type_command(args: &[&str]) 
