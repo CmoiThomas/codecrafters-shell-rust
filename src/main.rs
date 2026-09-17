@@ -10,6 +10,7 @@ const BUILTINS: &[(&str, fn(&[&str]))] = &[
     ("echo", echo_command),
     ("type", type_command),
     ("pwd", pwd_command),
+    ("cd", cd_command),
 ];
 
 fn main() {
@@ -51,6 +52,15 @@ fn echo_command(args: &[&str])
 fn pwd_command(args: &[&str]) 
 {
     println!("{}", env::current_dir().unwrap().display());
+}
+
+fn cd_command(args: &[&str]) 
+{
+    let Some(path) = args.first() else { return };
+
+    if let Err(e) = env::set_current_dir(path) {
+        println!("cd: {}: {}", path, e);
+    }
 }
 
 fn type_command(args: &[&str]) 
