@@ -127,9 +127,20 @@ fn tokenize(line: &str) -> Vec<String> {
             } else {
                 current.push(c);
             }
-        } else if in_double {
+                } else if in_double {
             if c == '"' {
                 in_double = false;
+            } else if c == '\\' {
+                match chars.next() {
+                    Some(next) if next == '"' || next == '\\' || next == '$' || next == '`' => {
+                        current.push(next);
+                    }
+                    Some(next) => {
+                        current.push('\\');
+                        current.push(next);
+                    }
+                    None => current.push('\\'),
+                }
             } else {
                 current.push(c);
             }
