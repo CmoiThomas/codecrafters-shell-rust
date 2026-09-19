@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,10 +9,16 @@ use std::process::{Command, Stdio};
 //"out" and "err" are the output destinations: the terminal, or a file when a redirection is used
 type Builtin = fn(&[&str], &mut dyn Write, &mut dyn Write);
 
+//one redirection target: where to write, and whether to append or to overwrite
+struct Target {
+    path: String,
+    append: bool,
+}
+
 //redirection targets found on the command line, None means "keep the terminal"
 struct Redirect {
-    out: Option<String>,
-    err: Option<String>,
+    out: Option<Target>,
+    err: Option<Target>,
 }
 
 const BUILTINS: &[(&str, Builtin)] = &[
@@ -64,24 +70,31 @@ fn main() {
 
                 f(&args, out, err);
             }
-            None => run_external(                                                //as_deref() turns Option<String> into Option<&str>
-                name,
-                &args,
-                redirect.out.as_deref(),
-                redirect.err.as_deref(),
-            ),
+            None => run_external(name, &args, &redirect),
         }
     }
 }
 
+//open a redirection file
+//">" truncates the file, ">>" keeps the existing content and writes at the end
+//both create the file when it does not exist
+fn open_file(t: &Target) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(t.append)
+        .truncate(!t.append)
+        .open(&t.path)
+}
+
 //open a redirection file, or return None on failure so the caller can skip the command
 //Some(None) means "no redirection asked", Some(Some(file)) means "file ready"
-fn open_target(path: &Option<String>) -> Option<Option<File>> {
-    match path {
-        Some(p) => match File::create(p) {                                       //File::create makes the file, or truncates it if it already exists
+fn open_target(target: &Option<Target>) -> Option<Option<File>> {
+    match target {
+        Some(t) => match open_file(t) {
             Ok(file) => Some(Some(file)),
             Err(e) => {
-                eprintln!("{}: {}", p, e);
+                eprintln!("{}: {}", t.path, e);
                 None
             }
         },
@@ -134,7 +147,7 @@ fn type_command(args: &[&str], out: &mut dyn Write, _err: &mut dyn Write)
 
 //check if a file is executable 
 //use in find_in_path()
-//CODECRAFTER USES A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TESTS AND GO TO THE NEXT STEP
+//CODECRAFTER USE A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TESTS AND GO TO THE NEXT STEP
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -159,21 +172,21 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 
 //run an external program
 //each stream that has a redirection is plugged on its file, the others stay on the terminal
-fn run_external(name: &str, args: &[&str], out: Option<&str>, err: Option<&str>) {
+fn run_external(name: &str, args: &[&str], redirect: &Redirect) {
     let mut cmd = Command::new(name);
     cmd.args(args);
 
-    if let Some(path) = out {
-        match File::create(path) {                                               //the file is created even if the command fails afterwards ("cat missing > out.txt" leaves out.txt empty)
+    if let Some(t) = &redirect.out {
+        match open_file(t) {                                                     //the file is created even if the command fails afterwards ("cat missing > out.txt" leaves out.txt empty)
             Ok(file) => { cmd.stdout(Stdio::from(file)); }
-            Err(e) => { eprintln!("{}: {}", path, e); return; }
+            Err(e) => { eprintln!("{}: {}", t.path, e); return; }
         }
     }
 
-    if let Some(path) = err {
-        match File::create(path) {                                               //same here: "echo hello 2> errors.txt" leaves errors.txt empty
+    if let Some(t) = &redirect.err {
+        match open_file(t) {                                                     //same here: "echo hello 2> errors.txt" leaves errors.txt empty
             Ok(file) => { cmd.stderr(Stdio::from(file)); }
-            Err(e) => { eprintln!("{}: {}", path, e); return; }
+            Err(e) => { eprintln!("{}: {}", t.path, e); return; }
         }
     }
 
@@ -243,8 +256,13 @@ fn tokenize(line: &str) -> Vec<String> {
     tokens
 }
 
+//build a redirection target from the token that follows the operator
+fn take_target(iter: &mut std::vec::IntoIter<String>, append: bool) -> Option<Target> {
+    iter.next().map(|path| Target { path, append })                              //consume the next token so it does not end up in the arguments
+}
+
 //separate the command tokens from the redirection targets
-//"cat missing 2> err.txt" gives (["cat", "missing"], Redirect { out: None, err: Some("err.txt") })
+//"echo hi >> out.txt" gives (["echo", "hi"], Redirect { out: Some(out.txt, append), err: None })
 fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
     let mut cmd = Vec::new();
     let mut redirect = Redirect { out: None, err: None };
@@ -252,8 +270,10 @@ fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
 
     while let Some(t) = iter.next() {
         match t.as_str() {
-            ">" | "1>" => redirect.out = iter.next(),                            //the next token is the target, consume it so it does not end up in the arguments
-            "2>" => redirect.err = iter.next(),
+            ">" | "1>" => redirect.out = take_target(&mut iter, false),
+            ">>" | "1>>" => redirect.out = take_target(&mut iter, true),
+            "2>" => redirect.err = take_target(&mut iter, false),
+            "2>>" => redirect.err = take_target(&mut iter, true),
             _ => cmd.push(t),
         }
     }
