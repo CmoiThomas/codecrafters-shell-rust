@@ -134,7 +134,7 @@ fn type_command(args: &[&str], out: &mut dyn Write, _err: &mut dyn Write)
 
 //check if a file is executable 
 //use in find_in_path()
-//CODECRAFTER USE A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TESTS AND GO TO THE NEXT STEP
+//CODECRAFTER USES A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TESTS AND GO TO THE NEXT STEP
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
