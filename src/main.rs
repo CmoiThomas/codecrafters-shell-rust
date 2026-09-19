@@ -119,7 +119,8 @@ fn tokenize(line: &str) -> Vec<String> {
     let mut in_single = false;
     let mut in_double = false;
 
-    for c in line.chars() {
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
         if in_single {
             if c == '\'' {
                 in_single = false;
@@ -137,6 +138,11 @@ fn tokenize(line: &str) -> Vec<String> {
             has_token = true;
         } else if c == '"' {
             in_double = true;
+            has_token = true;
+        } else if c == '\\' {
+            if let Some(next) = chars.next() {
+                current.push(next);
+            }
             has_token = true;
         } else if c.is_whitespace() {
             if has_token {
