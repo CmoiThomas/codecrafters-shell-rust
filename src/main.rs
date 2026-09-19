@@ -25,16 +25,17 @@ fn main() {
         let mut input= String::new();
         io::stdin().read_line(&mut input).unwrap();
 
-        let words: Vec<&str> = input.split_whitespace().collect();
+        let tokens = tokenize(&input);
 
-        let Some((name, args)) = words.split_first()                               //deconstruct the input into the command ("name") and its arguments (args")
+        let Some((name, args)) = tokens.split_first()                            //deconstruct the input into the command ("name") and its arguments ("args")
         else {
-            continue; //if no command is entered, continue to the next iteration of the loop
+            continue;
         };
 
-        match commands.get(*name) {
-            Some(f) => f(args),
-            None => run_external(name, args),
+        let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        match commands.get(name.as_str()) {
+            Some(f) => f(&args),
+            None => run_external(name, &args),
         }
     }
 }
@@ -54,6 +55,7 @@ fn pwd_command(args: &[&str])
     println!("{}", env::current_dir().unwrap().display());
 }
 
+//NEED TO REWORK THIS PART, THE ~ MANAGEMENT CAN BE IMPROVED, BUT IT WORKS FOR NOW
 fn cd_command(args: &[&str]) 
 {
     let raw = args.first().copied().unwrap_or("~");
@@ -107,4 +109,39 @@ fn run_external(name: &str, args: &[&str]) {
         Ok(_) => {}
         Err(_) => println!("{}: command not found", name),
     }
+}
+
+//split the input line into tokens, handling single quotes
+fn tokenize(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut has_token = false;
+    let mut in_single = false;
+
+    for c in line.chars() {
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            } else {
+                current.push(c);
+            }
+        } else if c == '\'' {
+            in_single = true;
+            has_token = true;
+        } else if c.is_whitespace() {
+            if has_token {
+                tokens.push(std::mem::take(&mut current));
+                has_token = false;
+            }
+        } else {
+            current.push(c);
+            has_token = true;
+        }
+    }
+
+    if has_token {
+        tokens.push(current);
+    }
+
+    tokens
 }
