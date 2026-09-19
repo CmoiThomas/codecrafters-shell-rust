@@ -6,8 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 //common signature for every builtin
-//the second parameter is the output destination: stdout, or a file when a redirection is used
-type Builtin = fn(&[&str], &mut dyn Write);
+//"out" and "err" are the output destinations: the terminal, or a file when a redirection is used
+type Builtin = fn(&[&str], &mut dyn Write, &mut dyn Write);
+
+//redirection targets found on the command line, None means "keep the terminal"
+struct Redirect {
+    out: Option<String>,
+    err: Option<String>,
+}
 
 const BUILTINS: &[(&str, Builtin)] = &[
     ("exit", exit_command),
@@ -31,7 +37,7 @@ fn main() {
             break;
         }
 
-        let (cmd_tokens, redirect) = split_redirect(tokenize(&input));           //split the line into tokens, then extract the redirection if there is one
+        let (cmd_tokens, redirect) = split_redirect(tokenize(&input));           //split the line into tokens, then extract the redirections if there are any
 
         let Some((name, args)) = cmd_tokens.split_first()                        //deconstruct the input into the command ("name") and its arguments ("args")
         else {
@@ -40,19 +46,50 @@ fn main() {
 
         let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();         //builtins take &str, convert the &String without copying
         match commands.get(name.as_str()) {
-            Some(f) => match &redirect {
-                Some(path) => match File::create(path) {                         //File::create makes the file, or truncates it if it already exists
-                    Ok(mut file) => f(&args, &mut file),
-                    Err(e) => eprintln!("{}: {}", path, e),
-                },
-                None => f(&args, &mut io::stdout()),
-            },
-            None => run_external(name, &args, redirect.as_deref()),              //as_deref() turns Option<String> into Option<&str>
+            Some(f) => {
+                let Some(mut out_file) = open_target(&redirect.out) else { continue };
+                let Some(mut err_file) = open_target(&redirect.err) else { continue };
+
+                let mut stdout = io::stdout();
+                let mut stderr = io::stderr();
+
+                let out: &mut dyn Write = match out_file.as_mut() {              //pick the file if there is one, the terminal otherwise
+                    Some(file) => file,
+                    None => &mut stdout,
+                };
+                let err: &mut dyn Write = match err_file.as_mut() {
+                    Some(file) => file,
+                    None => &mut stderr,
+                };
+
+                f(&args, out, err);
+            }
+            None => run_external(                                                //as_deref() turns Option<String> into Option<&str>
+                name,
+                &args,
+                redirect.out.as_deref(),
+                redirect.err.as_deref(),
+            ),
         }
     }
 }
 
-fn exit_command(args: &[&str], _out: &mut dyn Write)
+//open a redirection file, or return None on failure so the caller can skip the command
+//Some(None) means "no redirection asked", Some(Some(file)) means "file ready"
+fn open_target(path: &Option<String>) -> Option<Option<File>> {
+    match path {
+        Some(p) => match File::create(p) {                                       //File::create makes the file, or truncates it if it already exists
+            Ok(file) => Some(Some(file)),
+            Err(e) => {
+                eprintln!("{}: {}", p, e);
+                None
+            }
+        },
+        None => Some(None),
+    }
+}
+
+fn exit_command(args: &[&str], _out: &mut dyn Write, _err: &mut dyn Write)
 {
     let code = args
         .first()
@@ -61,29 +98,28 @@ fn exit_command(args: &[&str], _out: &mut dyn Write)
     std::process::exit(code);
 }
 
-fn echo_command(args: &[&str], out: &mut dyn Write) 
+fn echo_command(args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) 
 {
     writeln!(out, "{}", args.join(" ")).ok();
 }
 
-fn pwd_command(_args: &[&str], out: &mut dyn Write) 
+fn pwd_command(_args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) 
 {
     writeln!(out, "{}", env::current_dir().unwrap().display()).ok();
 }
 
 //NEED TO REWORK THIS PART, THE ~ MANAGEMENT CAN BE IMPROVED, BUT IT WORKS FOR NOW
-//cd never writes on stdout, its errors go to stderr which ">" does not redirect
-fn cd_command(args: &[&str], _out: &mut dyn Write) 
+fn cd_command(args: &[&str], _out: &mut dyn Write, err: &mut dyn Write) 
 {
     let raw = args.first().copied().unwrap_or("~");
     let path = raw.replacen('~', &env::var("HOME").unwrap_or_default(), 1);
 
     if env::set_current_dir(&path).is_err() {
-    eprintln!("cd: {path}: No such file or directory");
+    writeln!(err, "cd: {path}: No such file or directory").ok();                 //an error message goes to stderr, so "2>" can catch it
     }
 }
 
-fn type_command(args: &[&str], out: &mut dyn Write) 
+fn type_command(args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) 
 {
     let Some(name) = args.first() else { return };
 
@@ -122,20 +158,22 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 }
 
 //run an external program
-//if "redirect" is given, its standard output goes to the file, stderr stays on the terminal
-fn run_external(name: &str, args: &[&str], redirect: Option<&str>) {
+//each stream that has a redirection is plugged on its file, the others stay on the terminal
+fn run_external(name: &str, args: &[&str], out: Option<&str>, err: Option<&str>) {
     let mut cmd = Command::new(name);
     cmd.args(args);
 
-    if let Some(path) = redirect {
+    if let Some(path) = out {
         match File::create(path) {                                               //the file is created even if the command fails afterwards ("cat missing > out.txt" leaves out.txt empty)
-            Ok(file) => {
-                cmd.stdout(Stdio::from(file));
-            }
-            Err(e) => {
-                eprintln!("{}: {}", path, e);
-                return;
-            }
+            Ok(file) => { cmd.stdout(Stdio::from(file)); }
+            Err(e) => { eprintln!("{}: {}", path, e); return; }
+        }
+    }
+
+    if let Some(path) = err {
+        match File::create(path) {                                               //same here: "echo hello 2> errors.txt" leaves errors.txt empty
+            Ok(file) => { cmd.stderr(Stdio::from(file)); }
+            Err(e) => { eprintln!("{}: {}", path, e); return; }
         }
     }
 
@@ -149,14 +187,14 @@ fn run_external(name: &str, args: &[&str], redirect: Option<&str>) {
 fn tokenize(line: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
-    let mut has_token = false;                                                          //a token is being built
+    let mut has_token = false;                                                   //a token is being built
     let mut in_single = false;
     let mut in_double = false;
 
-    let mut chars = line.chars();                                                  //the iterator is advanced by hand to consume the character following a backslash
+    let mut chars = line.chars();                                                //the iterator is advanced by hand to consume the character following a backslash
     while let Some(c) = chars.next() {
         if in_single {
-            if c == '\'' {                                                                   //everything is literal inside single quotes, except the closing quote
+            if c == '\'' {                                                       //everything is literal inside single quotes, except the closing quote
                 in_single = false;
             } else {
                 current.push(c);
@@ -165,7 +203,7 @@ fn tokenize(line: &str) -> Vec<String> {
             if c == '"' {
                 in_double = false;
             } else if c == '\\' {
-                match chars.next() {                                                         //inside double quotes the backslash only escapes a short list of characters, elsewhere it stays literal
+                match chars.next() {                                             //inside double quotes the backslash only escapes a short list of characters, elsewhere it stays literal
                     Some(next @ ('"' | '\\' | '$' | '`')) => current.push(next),
                     Some(next) => {
                         current.push('\\');
@@ -177,18 +215,18 @@ fn tokenize(line: &str) -> Vec<String> {
                 current.push(c);
             }
         } else if c == '\\' {
-            if let Some(next) = chars.next() {                                         //outside quotes the backslash escapes any character
+            if let Some(next) = chars.next() {                                   //outside quotes the backslash escapes any character
                 current.push(next);
             }
             has_token = true;
         } else if c == '\'' {
             in_single = true;
-            has_token = true;                                                                //'' alone must produce an empty argument
+            has_token = true;                                                    //'' alone must produce an empty argument
         } else if c == '"' {
             in_double = true;
             has_token = true;
         } else if c.is_whitespace() {
-            if has_token {                                                                   //only a whitespace outside quotes ends a token, that is why 'hello''world' gives a single argument
+            if has_token {                                                       //only a whitespace outside quotes ends a token, that is why 'hello''world' gives a single argument
                 tokens.push(std::mem::take(&mut current));
                 has_token = false;
             }
@@ -198,27 +236,27 @@ fn tokenize(line: &str) -> Vec<String> {
         }
     }
 
-    if has_token {                                                                          //last token, when the line does not end with a whitespace
+    if has_token {                                                               //last token, when the line does not end with a whitespace
         tokens.push(current);
     }
 
     tokens
 }
 
-//separate the command tokens from the redirection target
-//"echo hello > out.txt" gives (["echo", "hello"], Some("out.txt"))
-fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Option<String>) {
+//separate the command tokens from the redirection targets
+//"cat missing 2> err.txt" gives (["cat", "missing"], Redirect { out: None, err: Some("err.txt") })
+fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
     let mut cmd = Vec::new();
-    let mut file = None;
-    let mut iter = tokens.into_iter();                                  //into_iter() consumes the Vec and gives owned String, so no clone
+    let mut redirect = Redirect { out: None, err: None };
+    let mut iter = tokens.into_iter();                                           //into_iter() consumes the Vec and gives owned String, so no clone
 
     while let Some(t) = iter.next() {
-        if t == ">" || t == "1>" {
-            file = iter.next();                                                          //the next token is the target, consume it so it does not end up in the arguments
-        } else {
-            cmd.push(t);
+        match t.as_str() {
+            ">" | "1>" => redirect.out = iter.next(),                            //the next token is the target, consume it so it does not end up in the arguments
+            "2>" => redirect.err = iter.next(),
+            _ => cmd.push(t),
         }
     }
 
-    (cmd, file)
+    (cmd, redirect)
 }
