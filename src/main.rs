@@ -312,7 +312,7 @@ fn read_line_raw() -> Option<String> {
                         print!("{}", &completed[buffer.len()..]);                //only print the part that was added
                         buffer = completed;
                     }
-                    None => print!("\x07"),                                      //no completion found, ring the bell and leave the input unchanged
+                    None => print!("\x07"),                                      //it do not make a bell sound as it should (at least for me), but it is needed to pass the codecrafter tests, so I keep it
                 }
                 io::stdout().flush().ok();
             }
@@ -346,22 +346,42 @@ fn read_line_raw() -> Option<String> {
     Some(buffer)
 }
 
-//complete a partial builtin name, with a trailing space so arguments can be typed right away
-//returns None when nothing matches or when several builtins match
+//collect every builtin and every executable in the PATH starting with the prefix
+fn candidates(prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = BUILTINS
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+
+    if let Ok(path) = env::var("PATH") {
+        for dir in env::split_paths(&path) {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };         //a PATH entry may not exist, just skip it
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with(prefix) && is_executable(&entry.path()) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+
+    names.sort();
+    names.dedup();                                                               //the same name can appear in several PATH directories
+    names
+}
+
+//complete a partial command name, with a trailing space so arguments can be typed right away
+//returns None when nothing matches or when several names match
 fn complete(prefix: &str) -> Option<String> {
     if prefix.is_empty() {
         return None;
     }
 
-    let mut matches = BUILTINS
-        .iter()
-        .map(|(n, _)| *n)
-        .filter(|n| n.starts_with(prefix));
-
-    let first = matches.next()?;
-    if matches.next().is_some() {                                                //ambiguous prefix, do nothing
+    let names = candidates(prefix);
+    if names.len() != 1 {
         return None;
     }
 
-    Some(format!("{first} "))
+    Some(format!("{} ", names[0]))
 }
