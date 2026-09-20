@@ -307,7 +307,7 @@ fn read_line_raw() -> Option<String> {
             }
             //END OF CODECRAFTER ONLY PART
 
-            KeyCode::Tab => {
+                       KeyCode::Tab => {
                 let (head, word) = split_word(&buffer);
                 let head = head.to_string();                                     //buffer is about to be reassigned, keep an owned copy
                 let word_len = word.len();
@@ -321,6 +321,20 @@ fn read_line_raw() -> Option<String> {
                     } else {
                         format!("{} ", names[0])                                 //a file gets a trailing space
                     };
+                    print!("{}", &completed[word_len..]);
+                    buffer = format!("{head}{completed}");
+                    last_was_tab = false;
+                } else if prefix.len() > word_len {
+                    print!("{}", &prefix[word_len..]);                           //several matches: complete up to their common prefix, no trailing space
+                    buffer = format!("{head}{prefix}");
+                    last_was_tab = false;
+                } else if names.is_empty() || !last_was_tab {
+                    print!("\x07");                                              //nothing to add: ring the bell
+                    last_was_tab = true;
+                } else {
+                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab in a row: list the matches
+                    last_was_tab = false;
+                }
 
                 io::stdout().flush().ok();
             }
