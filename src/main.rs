@@ -298,6 +298,14 @@ fn read_line_raw() -> Option<String> {
                 io::stdout().flush().ok();
                 break;
             }
+            //THIS PART IS ONLY TO GO THROUGH CODECRAFTER TEST, CODECRAFTER SEND LF INSTEAD OF CR FOR THE ENTER KEY
+            KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+                print!("\r\n");
+                io::stdout().flush().ok();
+                break;
+            }
+            //END OF CODECRAFTER ONLY PART
+            
             KeyCode::Tab => {
                 if let Some(completed) = complete(&buffer) {
                     print!("{}", &completed[buffer.len()..]);                    //only print the part that was added
