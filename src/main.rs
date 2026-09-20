@@ -325,7 +325,6 @@ fn read_line_raw() -> Option<String> {
 
                 io::stdout().flush().ok();
             }
-            }
             KeyCode::Backspace => {
                 if buffer.pop().is_some() {
                     print!("\u{8} \u{8}");                                       //move left, erase with a space, move left again
