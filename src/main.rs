@@ -316,21 +316,11 @@ fn read_line_raw() -> Option<String> {
                 let prefix = common_prefix(&names);
 
                 if names.len() == 1 {
-                    let completed = format!("{} ", names[0]);                    //single match: complete fully, with a trailing space
-                    print!("{}", &completed[word_len..]);
-                    buffer = format!("{head}{completed}");
-                    last_was_tab = false;
-                } else if prefix.len() > word_len {
-                    print!("{}", &prefix[word_len..]);                           //several matches: complete up to their common prefix, no trailing space
-                    buffer = format!("{head}{prefix}");
-                    last_was_tab = false;
-                } else if names.is_empty() || !last_was_tab {
-                    print!("\x07");                                              //nothing to add: ring the bell
-                    last_was_tab = true;
-                } else {
-                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab in a row: list the matches
-                    last_was_tab = false;
-                }
+                    let completed = if names[0].ends_with('/') {
+                        names[0].clone()                                         //a directory ends with "/" already, no space so the next level can be completed
+                    } else {
+                        format!("{} ", names[0])                                 //a file gets a trailing space
+                    };
 
                 io::stdout().flush().ok();
             }
@@ -431,8 +421,8 @@ fn split_word(line: &str) -> (&str, &str) {
     }
 }
 
-//files matching the prefix, in the current directory or in the directory the prefix points to
-//"path/to/f" looks inside "path/to" and keeps the directory part in the result
+//files and directories matching the prefix, in the current directory or in the one the prefix points to
+//a directory keeps its trailing "/" so the caller knows not to add a space
 fn file_candidates(word: &str) -> Vec<String> {
     let (dir, prefix) = match word.rfind('/') {
         Some(i) => word.split_at(i + 1),                                         //"path/to/" and "f"
@@ -444,9 +434,14 @@ fn file_candidates(word: &str) -> Vec<String> {
 
     let mut names: Vec<String> = entries
         .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with(prefix))
-        .map(|n| format!("{dir}{n}"))                                            //put the directory part back, the caller compares against the whole word
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.starts_with(prefix) {
+                return None;
+            }
+            let slash = if e.path().is_dir() { "/" } else { "" };
+            Some(format!("{dir}{name}{slash}"))                                  //put the directory part back, the caller compares against the whole word
+        })
         .collect();
 
     names.sort();
