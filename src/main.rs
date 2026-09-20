@@ -282,6 +282,7 @@ fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
 
 fn read_line_raw() -> Option<String> {
     let mut buffer = String::new();
+    let mut last_was_tab = false;                                                //a second Tab in a row lists the matches instead of ringing the bell
     enable_raw_mode().ok()?;
 
     loop {
@@ -307,14 +308,23 @@ fn read_line_raw() -> Option<String> {
             //END OF CODECRAFTER ONLY PART
 
             KeyCode::Tab => {
-                match complete(&buffer) {
-                    Some(completed) => {
-                        print!("{}", &completed[buffer.len()..]);                //only print the part that was added
-                        buffer = completed;
-                    }
-                    None => print!("\x07"),                                      //it do not make a bell sound as it should (at least for me), but it is needed to pass the codecrafter tests, so I keep it
+                let names = candidates(&buffer);
+
+                if names.len() == 1 {
+                    let completed = format!("{} ", names[0]);
+                    print!("{}", &completed[buffer.len()..]);                    //only print the part that was added
+                    buffer = completed;
+                    last_was_tab = false;
+                } else if names.is_empty() || !last_was_tab {
+                    print!("\x07");                                              //first Tab: ring the bell and leave the input unchanged
+                    last_was_tab = true;
+                } else {
+                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab: list the matches, then show the prompt again with the prefix
+                    last_was_tab = false;
                 }
+
                 io::stdout().flush().ok();
+            }
             }
             KeyCode::Backspace => {
                 if buffer.pop().is_some() {
