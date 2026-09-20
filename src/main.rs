@@ -4,6 +4,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 //common signature for every builtin
 //"out" and "err" are the output destinations: the terminal, or a file when a redirection is used
@@ -38,10 +40,7 @@ fn main() {
         print!("$ ");
         io::stdout().flush().unwrap();
 
-        let mut input= String::new();
-        if io::stdin().read_line(&mut input).unwrap() == 0 {                     //read_line returns the number of bytes read, 0 means end of file (Ctrl+D)
-            break;
-        }
+        let Some(input) = read_line_raw() else { break };
 
         let (cmd_tokens, redirect) = split_redirect(tokenize(&input));           //split the line into tokens, then extract the redirections if there are any
 
@@ -279,4 +278,79 @@ fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
     }
 
     (cmd, redirect)
+}
+
+fn read_line_raw() -> Option<String> {
+    let mut buffer = String::new();
+    enable_raw_mode().ok()?;
+
+    loop {
+        let Ok(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event::read() else {
+            continue;
+        };
+        if kind != KeyEventKind::Press {                                         //windows also reports key releases, ignore them
+            continue;
+        }
+
+        match code {
+            KeyCode::Enter => {
+                print!("\r\n");                                                  //in raw mode "\n" alone does not move the cursor back to column 0
+                io::stdout().flush().ok();
+                break;
+            }
+            KeyCode::Tab => {
+                if let Some(completed) = complete(&buffer) {
+                    print!("{}", &completed[buffer.len()..]);                    //only print the part that was added
+                    buffer = completed;
+                    io::stdout().flush().ok();
+                }
+            }
+            KeyCode::Backspace => {
+                if buffer.pop().is_some() {
+                    print!("\u{8} \u{8}");                                       //move left, erase with a space, move left again
+                    io::stdout().flush().ok();
+                }
+            }
+            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                if buffer.is_empty() {
+                    disable_raw_mode().ok();
+                    return None;
+                }
+            }
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                buffer.clear();
+                print!("\r\n$ ");
+                io::stdout().flush().ok();
+            }
+            KeyCode::Char(c) => {
+                buffer.push(c);
+                print!("{c}");                                                   //raw mode does not echo the typed characters
+                io::stdout().flush().ok();
+            }
+            _ => {}
+        }
+    }
+
+    disable_raw_mode().ok();
+    Some(buffer)
+}
+
+//complete a partial builtin name, with a trailing space so arguments can be typed right away
+//returns None when nothing matches or when several builtins match
+fn complete(prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+
+    let mut matches = BUILTINS
+        .iter()
+        .map(|(n, _)| *n)
+        .filter(|n| n.starts_with(prefix));
+
+    let first = matches.next()?;
+    if matches.next().is_some() {                                                //ambiguous prefix, do nothing
+        return None;
+    }
+
+    Some(format!("{first} "))
 }
