@@ -307,18 +307,22 @@ fn read_line_raw() -> Option<String> {
             }
             //END OF CODECRAFTER ONLY PART
 
-                        KeyCode::Tab => {
-                let names = candidates(&buffer);
+            KeyCode::Tab => {
+                let (head, word) = split_word(&buffer);
+                let head = head.to_string();                                     //buffer is about to be reassigned, keep an owned copy
+                let word_len = word.len();
+
+                let names = candidates_for(&buffer);
                 let prefix = common_prefix(&names);
 
                 if names.len() == 1 {
                     let completed = format!("{} ", names[0]);                    //single match: complete fully, with a trailing space
-                    print!("{}", &completed[buffer.len()..]);
-                    buffer = completed;
+                    print!("{}", &completed[word_len..]);
+                    buffer = format!("{head}{completed}");
                     last_was_tab = false;
-                } else if prefix.len() > buffer.len() {
-                    print!("{}", &prefix[buffer.len()..]);                       //several matches: complete up to their common prefix, no trailing space
-                    buffer = prefix;
+                } else if prefix.len() > word_len {
+                    print!("{}", &prefix[word_len..]);                           //several matches: complete up to their common prefix, no trailing space
+                    buffer = format!("{head}{prefix}");
                     last_was_tab = false;
                 } else if names.is_empty() || !last_was_tab {
                     print!("\x07");                                              //nothing to add: ring the bell
@@ -416,4 +420,37 @@ fn common_prefix(names: &[String]) -> String {
     }
 
     prefix.into_iter().collect()
+}
+
+//split the line into what stays untouched and the word being completed
+//"cat re" gives ("cat ", "re")
+fn split_word(line: &str) -> (&str, &str) {
+    match line.rfind(' ') {
+        Some(i) => line.split_at(i + 1),
+        None => ("", line),
+    }
+}
+
+//files in the current directory starting with the prefix
+fn file_candidates(prefix: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(".") else { return Vec::new() };
+
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+
+    names.sort();
+    names
+}
+
+//first word of the line completes commands, the following ones complete filenames
+fn candidates_for(line: &str) -> Vec<String> {
+    let (head, word) = split_word(line);
+    if head.is_empty() {
+        candidates(word)
+    } else {
+        file_candidates(word)
+    }
 }
