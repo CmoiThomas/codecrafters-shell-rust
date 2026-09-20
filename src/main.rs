@@ -307,19 +307,24 @@ fn read_line_raw() -> Option<String> {
             }
             //END OF CODECRAFTER ONLY PART
 
-            KeyCode::Tab => {
+                        KeyCode::Tab => {
                 let names = candidates(&buffer);
+                let prefix = common_prefix(&names);
 
                 if names.len() == 1 {
-                    let completed = format!("{} ", names[0]);
-                    print!("{}", &completed[buffer.len()..]);                    //only print the part that was added
+                    let completed = format!("{} ", names[0]);                    //single match: complete fully, with a trailing space
+                    print!("{}", &completed[buffer.len()..]);
                     buffer = completed;
                     last_was_tab = false;
+                } else if prefix.len() > buffer.len() {
+                    print!("{}", &prefix[buffer.len()..]);                       //several matches: complete up to their common prefix, no trailing space
+                    buffer = prefix;
+                    last_was_tab = false;
                 } else if names.is_empty() || !last_was_tab {
-                    print!("\x07");                                              //first Tab: ring the bell and leave the input unchanged
+                    print!("\x07");                                              //nothing to add: ring the bell
                     last_was_tab = true;
                 } else {
-                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab: list the matches, then show the prompt again with the prefix
+                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab in a row: list the matches
                     last_was_tab = false;
                 }
 
@@ -393,4 +398,22 @@ fn complete(prefix: &str) -> Option<String> {
     }
 
     Some(format!("{} ", names[0]))
+}
+
+//longest prefix shared by every candidate
+//"xyz_foo", "xyz_foo_bar" and "xyz_foo_bar_baz" give "xyz_foo"
+fn common_prefix(names: &[String]) -> String {
+    let Some(first) = names.first() else { return String::new() };
+
+    let mut prefix: Vec<char> = first.chars().collect();
+    for n in &names[1..] {
+        let common = prefix
+            .iter()
+            .zip(n.chars())
+            .take_while(|(a, b)| **a == *b)
+            .count();                                                            //how many leading characters this name still shares
+        prefix.truncate(common);
+    }
+
+    prefix.into_iter().collect()
 }
