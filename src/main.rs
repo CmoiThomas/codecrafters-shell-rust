@@ -307,11 +307,14 @@ fn read_line_raw() -> Option<String> {
             //END OF CODECRAFTER ONLY PART
 
             KeyCode::Tab => {
-                if let Some(completed) = complete(&buffer) {
-                    print!("{}", &completed[buffer.len()..]);                    //only print the part that was added
-                    buffer = completed;
-                    io::stdout().flush().ok();
+                match complete(&buffer) {
+                    Some(completed) => {
+                        print!("{}", &completed[buffer.len()..]);                //only print the part that was added
+                        buffer = completed;
+                    }
+                    None => print!("\x07"),                                      //no completion found, ring the bell and leave the input unchanged
                 }
+                io::stdout().flush().ok();
             }
             KeyCode::Backspace => {
                 if buffer.pop().is_some() {
