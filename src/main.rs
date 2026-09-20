@@ -431,14 +431,22 @@ fn split_word(line: &str) -> (&str, &str) {
     }
 }
 
-//files in the current directory starting with the prefix
-fn file_candidates(prefix: &str) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(".") else { return Vec::new() };
+//files matching the prefix, in the current directory or in the directory the prefix points to
+//"path/to/f" looks inside "path/to" and keeps the directory part in the result
+fn file_candidates(word: &str) -> Vec<String> {
+    let (dir, prefix) = match word.rfind('/') {
+        Some(i) => word.split_at(i + 1),                                         //"path/to/" and "f"
+        None => ("", word),
+    };
+
+    let search = if dir.is_empty() { "." } else { dir };
+    let Ok(entries) = std::fs::read_dir(search) else { return Vec::new() };      //the directory may not exist
 
     let mut names: Vec<String> = entries
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.starts_with(prefix))
+        .map(|n| format!("{dir}{n}"))                                            //put the directory part back, the caller compares against the whole word
         .collect();
 
     names.sort();
