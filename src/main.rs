@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
@@ -40,7 +41,7 @@ fn main() {
         print!("$ ");
         io::stdout().flush().unwrap();
 
-        let Some(input) = read_line_raw() else { break };
+        let Some(input) = read_line_raw() else { break };                        //None means end of input (Ctrl+D on an empty line)
 
         let (cmd_tokens, redirect) = split_redirect(tokenize(&input));           //split the line into tokens, then extract the redirections if there are any
 
@@ -74,32 +75,197 @@ fn main() {
     }
 }
 
-//open a redirection file
-//">" truncates the file, ">>" keeps the existing content and writes at the end
-//both create the file when it does not exist
-fn open_file(t: &Target) -> io::Result<File> {
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(t.append)
-        .truncate(!t.append)
-        .open(&t.path)
+// ---------------------------------------------------------------- line input
+
+//read a line in raw mode so the Tab key reaches the program
+//returns None on Ctrl+D with an empty line, which means end of input
+fn read_line_raw() -> Option<String> {
+    let mut buffer = String::new();
+    let mut last_was_tab = false;                                                //a second Tab in a row lists the matches instead of ringing the bell
+
+    enable_raw_mode().ok()?;
+
+    loop {
+        let Ok(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event::read() else {
+            continue;
+        };
+        if kind != KeyEventKind::Press {                                         //windows also reports key releases, ignore them
+            continue;
+        }
+
+        match code {
+            KeyCode::Enter => {
+                print!("\r\n");                                                  //in raw mode "\n" alone does not move the cursor back to column 0
+                io::stdout().flush().ok();
+                break;
+            }
+            //some clients send LF (Ctrl+J) instead of CR for the Enter key
+            KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+                print!("\r\n");
+                io::stdout().flush().ok();
+                break;
+            }
+            KeyCode::Tab => {
+                let (head, word) = split_word(&buffer);
+                let head = head.to_string();                                     //buffer is about to be reassigned, keep an owned copy
+                let word_len = word.len();
+
+                let names = candidates_for(&buffer);
+                let prefix = common_prefix(&names);
+
+                if names.len() == 1 {
+                    let completed = if names[0].ends_with('/') {
+                        names[0].clone()                                         //a directory already ends with "/", no space so the next level can be completed
+                    } else {
+                        format!("{} ", names[0])                                 //anything else gets a trailing space
+                    };
+                    print!("{}", &completed[word_len..]);                        //only print the part that was added
+                    buffer = format!("{head}{completed}");
+                    last_was_tab = false;
+                } else if prefix.len() > word_len {
+                    print!("{}", &prefix[word_len..]);                           //several matches: complete up to their common prefix, no trailing space
+                    buffer = format!("{head}{prefix}");
+                    last_was_tab = false;
+                } else if names.is_empty() || !last_was_tab {
+                    print!("\x07");                                              //nothing to add: ring the bell and leave the input unchanged
+                    last_was_tab = true;
+                } else {
+                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab in a row: list the matches, then show the prompt again
+                    last_was_tab = false;
+                }
+
+                io::stdout().flush().ok();
+            }
+            KeyCode::Backspace => {
+                if buffer.pop().is_some() {
+                    print!("\u{8} \u{8}");                                       //move left, erase with a space, move left again
+                    io::stdout().flush().ok();
+                }
+                last_was_tab = false;
+            }
+            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                if buffer.is_empty() {
+                    disable_raw_mode().ok();
+                    return None;
+                }
+            }
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                buffer.clear();
+                print!("\r\n$ ");
+                io::stdout().flush().ok();
+                last_was_tab = false;
+            }
+            KeyCode::Char(_) if modifiers.contains(KeyModifiers::CONTROL) => {}  //ignore the other control combinations
+            KeyCode::Char(c) => {
+                buffer.push(c);
+                print!("{c}");                                                   //raw mode does not echo the typed characters
+                io::stdout().flush().ok();
+                last_was_tab = false;
+            }
+            _ => {}
+        }
+    }
+
+    disable_raw_mode().ok();                                                     //external programs inherit the terminal, they need it back in normal mode
+    Some(buffer)
 }
 
-//open a redirection file, or return None on failure so the caller can skip the command
-//Some(None) means "no redirection asked", Some(Some(file)) means "file ready"
-fn open_target(target: &Option<Target>) -> Option<Option<File>> {
-    match target {
-        Some(t) => match open_file(t) {
-            Ok(file) => Some(Some(file)),
-            Err(e) => {
-                eprintln!("{}: {}", t.path, e);
-                None
-            }
-        },
-        None => Some(None),
+// ---------------------------------------------------------------- completion
+
+//split the line into what stays untouched and the word being completed
+//"cat re" gives ("cat ", "re")
+fn split_word(line: &str) -> (&str, &str) {
+    match line.rfind(' ') {
+        Some(i) => line.split_at(i + 1),
+        None => ("", line),
     }
 }
+
+//first word of the line completes commands, the following ones complete filenames
+fn candidates_for(line: &str) -> Vec<String> {
+    let (head, word) = split_word(line);
+    if head.is_empty() {
+        command_candidates(word)
+    } else {
+        file_candidates(word)
+    }
+}
+
+//every builtin and every executable in the PATH starting with the prefix
+fn command_candidates(prefix: &str) -> Vec<String> {
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+
+    let mut names: Vec<String> = BUILTINS
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+
+    if let Ok(path) = env::var("PATH") {
+        for dir in env::split_paths(&path) {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };         //a PATH entry may not exist, just skip it
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with(prefix) && is_executable(&entry.path()) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+
+    names.sort();
+    names.dedup();                                                               //the same name can appear in several PATH directories
+    names
+}
+
+//files and directories matching the prefix, in the current directory or in the one the prefix points to
+//"path/to/f" looks inside "path/to", and a directory keeps a trailing "/" so the caller knows not to add a space
+fn file_candidates(word: &str) -> Vec<String> {
+    let (dir, prefix) = match word.rfind('/') {
+        Some(i) => word.split_at(i + 1),                                         //"path/to/" and "f"
+        None => ("", word),
+    };
+
+    let search = if dir.is_empty() { "." } else { dir };
+    let Ok(entries) = std::fs::read_dir(search) else { return Vec::new() };      //the directory may not exist
+
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.starts_with(prefix) {
+                return None;
+            }
+            let slash = if e.path().is_dir() { "/" } else { "" };
+            Some(format!("{dir}{name}{slash}"))                                  //put the directory part back, the caller compares against the whole word
+        })
+        .collect();
+
+    names.sort();
+    names
+}
+
+//longest prefix shared by every candidate
+//"xyz_foo", "xyz_foo_bar" and "xyz_foo_bar_baz" give "xyz_foo"
+fn common_prefix(names: &[String]) -> String {
+    let Some(first) = names.first() else { return String::new() };
+
+    let mut prefix: Vec<char> = first.chars().collect();
+    for n in &names[1..] {
+        let common = prefix
+            .iter()
+            .zip(n.chars())
+            .take_while(|(a, b)| **a == *b)
+            .count();                                                            //how many leading characters this name still shares
+        prefix.truncate(common);
+    }
+
+    prefix.into_iter().collect()
+}
+
+// ------------------------------------------------------------------ builtins
 
 fn exit_command(args: &[&str], _out: &mut dyn Write, _err: &mut dyn Write)
 {
@@ -144,8 +310,10 @@ fn type_command(args: &[&str], out: &mut dyn Write, _err: &mut dyn Write)
     }  
 }
 
+// ------------------------------------------------------------------ external
+
 //check if a file is executable 
-//use in find_in_path()
+//use in find_in_path() and command_candidates()
 //CODECRAFTER USE A UNIX OS, SO THIS PART IS ONLY TO VALIDATE THE TESTS AND GO TO THE NEXT STEP
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
@@ -195,6 +363,62 @@ fn run_external(name: &str, args: &[&str], redirect: &Redirect) {
     }
 }
 
+// --------------------------------------------------------------- redirection
+
+//open a redirection file
+//">" truncates the file, ">>" keeps the existing content and writes at the end
+//both create the file when it does not exist
+fn open_file(t: &Target) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(t.append)
+        .truncate(!t.append)
+        .open(&t.path)
+}
+
+//open a redirection file, or return None on failure so the caller can skip the command
+//Some(None) means "no redirection asked", Some(Some(file)) means "file ready"
+fn open_target(target: &Option<Target>) -> Option<Option<File>> {
+    match target {
+        Some(t) => match open_file(t) {
+            Ok(file) => Some(Some(file)),
+            Err(e) => {
+                eprintln!("{}: {}", t.path, e);
+                None
+            }
+        },
+        None => Some(None),
+    }
+}
+
+//build a redirection target from the token that follows the operator
+fn take_target(iter: &mut std::vec::IntoIter<String>, append: bool) -> Option<Target> {
+    iter.next().map(|path| Target { path, append })                              //consume the next token so it does not end up in the arguments
+}
+
+//separate the command tokens from the redirection targets
+//"echo hi >> out.txt" gives (["echo", "hi"], Redirect { out: Some(out.txt, append), err: None })
+fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
+    let mut cmd = Vec::new();
+    let mut redirect = Redirect { out: None, err: None };
+    let mut iter = tokens.into_iter();                                           //into_iter() consumes the Vec and gives owned String, so no clone
+
+    while let Some(t) = iter.next() {
+        match t.as_str() {
+            ">" | "1>" => redirect.out = take_target(&mut iter, false),
+            ">>" | "1>>" => redirect.out = take_target(&mut iter, true),
+            "2>" => redirect.err = take_target(&mut iter, false),
+            "2>>" => redirect.err = take_target(&mut iter, true),
+            _ => cmd.push(t),
+        }
+    }
+
+    (cmd, redirect)
+}
+
+// ------------------------------------------------------------------ tokenize
+
 //split the input line into tokens, handling single quotes, double quotes and backslash escaping
 fn tokenize(line: &str) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -216,7 +440,9 @@ fn tokenize(line: &str) -> Vec<String> {
                 in_double = false;
             } else if c == '\\' {
                 match chars.next() {                                             //inside double quotes the backslash only escapes a short list of characters, elsewhere it stays literal
-                    Some(next @ ('"' | '\\' | '$' | '`')) => current.push(next),
+                    Some(next) if next == '"' || next == '\\' || next == '$' || next == '`' => {
+                        current.push(next);
+                    }
                     Some(next) => {
                         current.push('\\');
                         current.push(next);
@@ -253,221 +479,4 @@ fn tokenize(line: &str) -> Vec<String> {
     }
 
     tokens
-}
-
-//build a redirection target from the token that follows the operator
-fn take_target(iter: &mut std::vec::IntoIter<String>, append: bool) -> Option<Target> {
-    iter.next().map(|path| Target { path, append })                              //consume the next token so it does not end up in the arguments
-}
-
-//separate the command tokens from the redirection targets
-//"echo hi >> out.txt" gives (["echo", "hi"], Redirect { out: Some(out.txt, append), err: None })
-fn split_redirect(tokens: Vec<String>) -> (Vec<String>, Redirect) {
-    let mut cmd = Vec::new();
-    let mut redirect = Redirect { out: None, err: None };
-    let mut iter = tokens.into_iter();                                           //into_iter() consumes the Vec and gives owned String, so no clone
-
-    while let Some(t) = iter.next() {
-        match t.as_str() {
-            ">" | "1>" => redirect.out = take_target(&mut iter, false),
-            ">>" | "1>>" => redirect.out = take_target(&mut iter, true),
-            "2>" => redirect.err = take_target(&mut iter, false),
-            "2>>" => redirect.err = take_target(&mut iter, true),
-            _ => cmd.push(t),
-        }
-    }
-
-    (cmd, redirect)
-}
-
-fn read_line_raw() -> Option<String> {
-    let mut buffer = String::new();
-    let mut last_was_tab = false;                                                //a second Tab in a row lists the matches instead of ringing the bell
-    enable_raw_mode().ok()?;
-
-    loop {
-        let Ok(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event::read() else {
-            continue;
-        };
-        if kind != KeyEventKind::Press {                                         //windows also reports key releases, ignore them
-            continue;
-        }
-
-        match code {
-            KeyCode::Enter => {
-                print!("\r\n");                                                  //in raw mode "\n" alone does not move the cursor back to column 0
-                io::stdout().flush().ok();
-                break;
-            }
-            //THIS PART IS ONLY TO GO THROUGH CODECRAFTER TEST, CODECRAFTER SEND LF (WHICH CORRESPOND TO "CTRL+J", SO IT ADD A "j" AT THE END OF EVERY LINE ) INSTEAD OF CR FOR THE ENTER KEY
-            KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
-                print!("\r\n");
-                io::stdout().flush().ok();
-                break;
-            }
-            //END OF CODECRAFTER ONLY PART
-
-                       KeyCode::Tab => {
-                let (head, word) = split_word(&buffer);
-                let head = head.to_string();                                     //buffer is about to be reassigned, keep an owned copy
-                let word_len = word.len();
-
-                let names = candidates_for(&buffer);
-                let prefix = common_prefix(&names);
-
-                if names.len() == 1 {
-                    let completed = if names[0].ends_with('/') {
-                        names[0].clone()                                         //a directory ends with "/" already, no space so the next level can be completed
-                    } else {
-                        format!("{} ", names[0])                                 //a file gets a trailing space
-                    };
-                    print!("{}", &completed[word_len..]);
-                    buffer = format!("{head}{completed}");
-                    last_was_tab = false;
-                } else if prefix.len() > word_len {
-                    print!("{}", &prefix[word_len..]);                           //several matches: complete up to their common prefix, no trailing space
-                    buffer = format!("{head}{prefix}");
-                    last_was_tab = false;
-                } else if names.is_empty() || !last_was_tab {
-                    print!("\x07");                                              //nothing to add: ring the bell
-                    last_was_tab = true;
-                } else {
-                    print!("\r\n{}\r\n$ {}", names.join("  "), buffer);          //second Tab in a row: list the matches
-                    last_was_tab = false;
-                }
-
-                io::stdout().flush().ok();
-            }
-            KeyCode::Backspace => {
-                if buffer.pop().is_some() {
-                    print!("\u{8} \u{8}");                                       //move left, erase with a space, move left again
-                    io::stdout().flush().ok();
-                }
-            }
-            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-                if buffer.is_empty() {
-                    disable_raw_mode().ok();
-                    return None;
-                }
-            }
-            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                buffer.clear();
-                print!("\r\n$ ");
-                io::stdout().flush().ok();
-            }
-            KeyCode::Char(c) => {
-                buffer.push(c);
-                print!("{c}");                                                   //raw mode does not echo the typed characters
-                io::stdout().flush().ok();
-            }
-            _ => {}
-        }
-    }
-
-    disable_raw_mode().ok();
-    Some(buffer)
-}
-
-//collect every builtin and every executable in the PATH starting with the prefix
-fn candidates(prefix: &str) -> Vec<String> {
-    let mut names: Vec<String> = BUILTINS
-        .iter()
-        .map(|(n, _)| n.to_string())
-        .filter(|n| n.starts_with(prefix))
-        .collect();
-
-    if let Ok(path) = env::var("PATH") {
-        for dir in env::split_paths(&path) {
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };         //a PATH entry may not exist, just skip it
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name.starts_with(prefix) && is_executable(&entry.path()) {
-                    names.push(name);
-                }
-            }
-        }
-    }
-
-    names.sort();
-    names.dedup();                                                               //the same name can appear in several PATH directories
-    names
-}
-
-//complete a partial command name, with a trailing space so arguments can be typed right away
-//returns None when nothing matches or when several names match
-fn complete(prefix: &str) -> Option<String> {
-    if prefix.is_empty() {
-        return None;
-    }
-
-    let names = candidates(prefix);
-    if names.len() != 1 {
-        return None;
-    }
-
-    Some(format!("{} ", names[0]))
-}
-
-//longest prefix shared by every candidate
-//"xyz_foo", "xyz_foo_bar" and "xyz_foo_bar_baz" give "xyz_foo"
-fn common_prefix(names: &[String]) -> String {
-    let Some(first) = names.first() else { return String::new() };
-
-    let mut prefix: Vec<char> = first.chars().collect();
-    for n in &names[1..] {
-        let common = prefix
-            .iter()
-            .zip(n.chars())
-            .take_while(|(a, b)| **a == *b)
-            .count();                                                            //how many leading characters this name still shares
-        prefix.truncate(common);
-    }
-
-    prefix.into_iter().collect()
-}
-
-//split the line into what stays untouched and the word being completed
-//"cat re" gives ("cat ", "re")
-fn split_word(line: &str) -> (&str, &str) {
-    match line.rfind(' ') {
-        Some(i) => line.split_at(i + 1),
-        None => ("", line),
-    }
-}
-
-//files and directories matching the prefix, in the current directory or in the one the prefix points to
-//a directory keeps its trailing "/" so the caller knows not to add a space
-fn file_candidates(word: &str) -> Vec<String> {
-    let (dir, prefix) = match word.rfind('/') {
-        Some(i) => word.split_at(i + 1),                                         //"path/to/" and "f"
-        None => ("", word),
-    };
-
-    let search = if dir.is_empty() { "." } else { dir };
-    let Ok(entries) = std::fs::read_dir(search) else { return Vec::new() };      //the directory may not exist
-
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if !name.starts_with(prefix) {
-                return None;
-            }
-            let slash = if e.path().is_dir() { "/" } else { "" };
-            Some(format!("{dir}{name}{slash}"))                                  //put the directory part back, the caller compares against the whole word
-        })
-        .collect();
-
-    names.sort();
-    names
-}
-
-//first word of the line completes commands, the following ones complete filenames
-fn candidates_for(line: &str) -> Vec<String> {
-    let (head, word) = split_word(line);
-    if head.is_empty() {
-        candidates(word)
-    } else {
-        file_candidates(word)
-    }
 }
