@@ -1,0 +1,85 @@
+//turns a raw input line into the list of words the shell will work with
+//handles single quotes, double quotes and backslash escaping
+
+//split the input line into tokens
+pub fn tokenize(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut has_token = false;                                                   //a token is being built
+    let mut in_single = false;
+    let mut in_double = false;
+
+    let mut chars = line.chars();                                                //advanced by hand to consume the character following a backslash
+    while let Some(c) = chars.next() {
+        if in_single {
+            //everything is literal inside single quotes, except the closing quote
+            if c == '\'' {
+                in_single = false;
+            } else {
+                current.push(c);
+            }
+            continue;
+        }
+
+        if in_double {
+            if c == '"' {
+                in_double = false;
+            } else if c == '\\' {
+                escape_in_double(chars.next(), &mut current);
+            } else {
+                current.push(c);
+            }
+            continue;
+        }
+
+        match c {
+            //outside quotes the backslash escapes any character
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+                has_token = true;
+            }
+            //'' alone must still produce an empty argument
+            '\'' => {
+                in_single = true;
+                has_token = true;
+            }
+            '"' => {
+                in_double = true;
+                has_token = true;
+            }
+            //only a whitespace outside quotes ends a token
+            //that is why 'hello''world' gives a single argument
+            _ if c.is_whitespace() => {
+                if has_token {
+                    tokens.push(std::mem::take(&mut current));
+                    has_token = false;
+                }
+            }
+            _ => {
+                current.push(c);
+                has_token = true;
+            }
+        }
+    }
+
+    if has_token {                                                               //last token, when the line does not end with a whitespace
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+//inside double quotes the backslash only escapes a short list of characters
+//in front of anything else it stays literal, so both characters are kept
+fn escape_in_double(next: Option<char>, current: &mut String) {
+    match next {
+        Some(c) if matches!(c, '"' | '\\' | '$' | '`') => current.push(c),
+        Some(c) => {
+            current.push('\\');
+            current.push(c);
+        }
+        None => current.push('\\'),
+    }
+}
