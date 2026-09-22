@@ -3,16 +3,22 @@
 
 use std::collections::HashMap;
 
+use crate::jobs::Job;
+
 pub struct Shell {
     //completer scripts registered with "complete -C", by command name
     //"git" -> "/path/to/git/completer"
     pub completers: HashMap<String, String>,
+
+    //commands started with "&", ordered by job number
+    pub jobs: Vec<Job>,
 }
 
 impl Shell {
     pub fn new() -> Shell {
         Shell {
             completers: HashMap::new(),
+            jobs: Vec::new(),
         }
     }
 }

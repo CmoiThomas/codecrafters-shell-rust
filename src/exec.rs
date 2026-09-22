@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::builtins::Builtin;
+use crate::jobs;
 use crate::redirect::{open_file, open_target, Redirect};
 use crate::shell::Shell;
 
@@ -33,34 +34,53 @@ pub fn run_builtin(shell: &mut Shell, f: Builtin, args: &[&str], redirect: &Redi
     f(shell, args, out, err);
 }
 
-//run an external program
-//each stream that has a redirection is plugged on its file, the others stay on
-//the terminal
+//run an external program and wait for it to finish
 pub fn run_external(name: &str, args: &[&str], redirect: &Redirect) {
-    let mut cmd = Command::new(name);
-    cmd.args(args);
-
-    //here too the file is created even if the command fails afterwards:
-    //"cat missing > out.txt" leaves an empty out.txt behind
-    if let Some(target) = &redirect.out {
-        match open_file(target) {
-            Ok(file) => { cmd.stdout(Stdio::from(file)); }
-            Err(e) => { eprintln!("{}: {}", target.path, e); return; }
-        }
-    }
-
-    if let Some(target) = &redirect.err {
-        match open_file(target) {
-            Ok(file) => { cmd.stderr(Stdio::from(file)); }
-            Err(e) => { eprintln!("{}: {}", target.path, e); return; }
-        }
-    }
+    let Some(mut cmd) = build_command(name, args, redirect) else { return };
 
     //status() waits for the program to finish
     //Err means the launch itself failed, so the command does not exist
     if cmd.status().is_err() {
         println!("{name}: command not found");
     }
+}
+
+//start an external program without waiting for it, and add it to the jobs table
+pub fn run_background(shell: &mut Shell, name: &str, args: &[&str], redirect: &Redirect, command: String) {
+    let Some(mut cmd) = build_command(name, args, redirect) else { return };
+
+    //stdout and stderr stay on the terminal, but the keyboard belongs to the shell
+    cmd.stdin(Stdio::null());
+
+    match cmd.spawn() {
+        Ok(child) => jobs::add(&mut shell.jobs, child, command),
+        Err(_) => println!("{name}: command not found"),
+    }
+}
+
+//prepare a program with its arguments and redirections, without starting it
+//None means a redirection file could not be opened, the error is already printed
+fn build_command(name: &str, args: &[&str], redirect: &Redirect) -> Option<Command> {
+    let mut cmd = Command::new(name);
+    cmd.args(args);
+
+    //the files are created even if the command fails afterwards:
+    //"cat missing > out.txt" leaves an empty out.txt behind
+    if let Some(target) = &redirect.out {
+        match open_file(target) {
+            Ok(file) => { cmd.stdout(Stdio::from(file)); }
+            Err(e) => { eprintln!("{}: {}", target.path, e); return None; }
+        }
+    }
+
+    if let Some(target) = &redirect.err {
+        match open_file(target) {
+            Ok(file) => { cmd.stderr(Stdio::from(file)); }
+            Err(e) => { eprintln!("{}: {}", target.path, e); return None; }
+        }
+    }
+
+    Some(cmd)
 }
 
 //first directory of the PATH holding an executable with this name

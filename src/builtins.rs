@@ -4,6 +4,7 @@ use std::env;
 use std::io::Write;
 
 use crate::exec::find_in_path;
+use crate::jobs;
 use crate::shell::Shell;
 
 //"out" and "err" are the output destinations: the terminal, or a file when a
@@ -17,6 +18,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("pwd", pwd_command),
     ("cd", cd_command),
     ("complete", complete_command),
+    ("jobs", jobs_command),
 ];
 
 //look a builtin up by name
@@ -106,4 +108,9 @@ fn complete_command(shell: &mut Shell, args: &[&str], out: &mut dyn Write, err: 
             writeln!(err, "complete: usage: complete [-C script | -p | -r] command...").ok();
         }
     }
+}
+
+//list the background jobs, and forget the ones that finished
+fn jobs_command(shell: &mut Shell, _args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) {
+    jobs::report(&mut shell.jobs, out, true);
 }

@@ -83,3 +83,13 @@ fn escape_in_double(next: Option<char>, current: &mut String) {
         None => current.push('\\'),
     }
 }
+
+//a trailing "&" asks for the command to run in the background
+//it is removed from the tokens, and the answer tells whether it was there
+pub fn take_background_marker(tokens: &mut Vec<String>) -> bool {
+    if tokens.last().is_some_and(|t| t == "&") {
+        tokens.pop();
+        return true;
+    }
+    false
+}
