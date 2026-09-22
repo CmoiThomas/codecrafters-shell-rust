@@ -93,3 +93,19 @@ pub fn take_background_marker(tokens: &mut Vec<String>) -> bool {
     }
     false
 }
+
+//cut the tokens at every "|", one group per command of the pipeline
+//there is always at least one group, so a line without "|" gives a single command
+pub fn split_pipeline(tokens: Vec<String>) -> Vec<Vec<String>> {
+    let mut stages = vec![Vec::new()];
+
+    for token in tokens {
+        if token == "|" {
+            stages.push(Vec::new());
+        } else if let Some(stage) = stages.last_mut() {
+            stage.push(token);
+        }
+    }
+
+    stages
+}

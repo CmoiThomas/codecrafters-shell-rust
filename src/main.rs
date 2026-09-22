@@ -4,13 +4,14 @@ mod exec;
 mod input;
 mod jobs;
 mod parser;
+mod pipeline;
 mod redirect;
 mod shell;
 
 use std::io;
 
 use input::read_line;
-use parser::{take_background_marker, tokenize};
+use parser::{split_pipeline, take_background_marker, tokenize};
 use redirect::split_redirect;
 use shell::Shell;
 
@@ -26,6 +27,14 @@ fn main() {
         let background = take_background_marker(&mut tokens);                    //a trailing "&" runs the command without waiting for it
         let command_text = tokens.join(" ");                                     //kept for the jobs table, redirections included
 
+        let mut stages = split_pipeline(tokens);                                 //one group of tokens per command of the pipeline
+
+        if stages.len() > 1 {
+            pipeline::run(&mut shell, stages);
+            continue;
+        }
+
+        let Some(tokens) = stages.pop() else { continue };
         let (tokens, redirect) = split_redirect(tokens);                         //extract the redirections
 
         let Some((name, args)) = tokens.split_first() else { continue };         //an empty line has nothing to run

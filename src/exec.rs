@@ -60,7 +60,7 @@ pub fn run_background(shell: &mut Shell, name: &str, args: &[&str], redirect: &R
 
 //prepare a program with its arguments and redirections, without starting it
 //None means a redirection file could not be opened, the error is already printed
-fn build_command(name: &str, args: &[&str], redirect: &Redirect) -> Option<Command> {
+pub fn build_command(name: &str, args: &[&str], redirect: &Redirect) -> Option<Command> {
     let mut cmd = Command::new(name);
     cmd.args(args);
 
