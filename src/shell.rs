@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 use crate::jobs::Job;
 
+//shell variables created with "declare", by name
+pub type Variables = HashMap<String, String>;
+
 pub struct Shell {
     //completer scripts registered with "complete -C", by command name
     //"git" -> "/path/to/git/completer"
@@ -18,6 +21,9 @@ pub struct Shell {
 
     //how many history entries have already been written to the history file
     pub appended: usize,
+
+    //variables created with "declare", used by parameter expansion
+    pub variables: Variables,
 }
 
 impl Shell {
@@ -27,6 +33,7 @@ impl Shell {
             jobs: Vec::new(),
             history: Vec::new(),
             appended: 0,
+            variables: Variables::new(),
         }
     }
 }

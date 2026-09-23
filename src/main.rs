@@ -34,7 +34,7 @@ fn main() {
             shell.history.push(entry.to_string());
         }
 
-        let mut tokens = tokenize(&line);
+        let mut tokens = tokenize(&line, &shell.variables);
         let background = take_background_marker(&mut tokens);                    //a trailing "&" runs the command without waiting for it
         let command_text = tokens.join(" ");                                     //kept for the jobs table, redirections included
 

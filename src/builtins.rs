@@ -21,6 +21,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("complete", complete_command),
     ("jobs", jobs_command),
     ("history", history_command),
+    ("declare", declare_command),
 ];
 
 //look a builtin up by name
@@ -161,4 +162,75 @@ fn list_history(shell: &Shell, args: &[&str], out: &mut dyn Write) {
             writeln!(out, "{:>5}  {}", index + 1, entry).ok();
         }
     }
+}
+
+//create and inspect shell variables
+//  declare NAME=VALUE   record a variable
+//  declare -p NAME      print a description of it
+fn declare_command(shell: &mut Shell, args: &[&str], out: &mut dyn Write, err: &mut dyn Write) {
+    match args {
+        ["-p"] => {
+            //no name given: describe every variable, in a stable order
+            let mut names: Vec<&String> = shell.variables.keys().collect();
+            names.sort();
+            for name in names {
+                describe(shell, name, out, err);
+            }
+        }
+        ["-p", names @ ..] => {
+            for name in names {
+                describe(shell, name, out, err);
+            }
+        }
+        _ => {
+            for argument in args {
+                assign(shell, argument, err);
+            }
+        }
+    }
+}
+
+//print the line describing one variable, or say it does not exist
+fn describe(shell: &Shell, name: &str, out: &mut dyn Write, err: &mut dyn Write) {
+    match shell.variables.get(name) {
+        Some(value) => { writeln!(out, "declare -- {name}=\"{value}\"").ok(); }
+        None => { writeln!(err, "declare: {name}: not found").ok(); }
+    }
+}
+
+//record one "NAME=VALUE" argument, refusing names that are not identifiers
+fn assign(shell: &mut Shell, argument: &str, err: &mut dyn Write) {
+    //without "=" there is only a name, and nothing to store
+    let (name, value) = match argument.split_once('=') {
+        Some((name, value)) => (name, Some(value)),
+        None => (argument, None),
+    };
+
+    if !is_identifier(name) {
+        //the error quotes the argument as it was written, backtick included
+        writeln!(err, "declare: `{argument}\': not a valid identifier").ok();
+        return;
+    }
+
+    if let Some(value) = value {
+        shell.variables.insert(name.to_string(), value.to_string());
+    }
+}
+
+//a name starts with a letter or an underscore, the rest may also hold digits
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            return false;
+        }
+    }
+
+    true
 }
