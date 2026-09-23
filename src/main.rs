@@ -23,6 +23,12 @@ fn main() {
 
         let Some(line) = read_line(&shell) else { break };                       //None means end of input (Ctrl+D on an empty line)
 
+        //the line is remembered before it runs, so "history" can list itself
+        let entry = line.trim();
+        if !entry.is_empty() {
+            shell.history.push(entry.to_string());
+        }
+
         let mut tokens = tokenize(&line);
         let background = take_background_marker(&mut tokens);                    //a trailing "&" runs the command without waiting for it
         let command_text = tokens.join(" ");                                     //kept for the jobs table, redirections included

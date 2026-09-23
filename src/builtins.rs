@@ -19,6 +19,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("cd", cd_command),
     ("complete", complete_command),
     ("jobs", jobs_command),
+    ("history", history_command),
 ];
 
 //look a builtin up by name
@@ -113,4 +114,22 @@ fn complete_command(shell: &mut Shell, args: &[&str], out: &mut dyn Write, err: 
 //list the background jobs, and forget the ones that finished
 fn jobs_command(shell: &mut Shell, _args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) {
     jobs::report(&mut shell.jobs, out, true);
+}
+
+//list the commands entered so far, or only the last n of them with "history <n>"
+fn history_command(shell: &mut Shell, args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) {
+    //the entry number shown is its position in the list, starting at 1
+    let first = match args.first() {
+        Some(arg) => match arg.parse::<usize>() {
+            Ok(count) => shell.history.len().saturating_sub(count),              //saturating_sub avoids going below zero when n is too big
+            Err(_) => 0,
+        },
+        None => 0,
+    };
+
+    for (index, entry) in shell.history.iter().enumerate() {
+        if index >= first {
+            writeln!(out, "{:>5}  {}", index + 1, entry).ok();
+        }
+    }
 }

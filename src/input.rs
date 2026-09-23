@@ -18,6 +18,8 @@ pub fn read_line(shell: &Shell) -> Option<String> {
 
     let mut buffer = String::new();
     let mut last_was_tab = false;                                                //a second Tab in a row lists the matches instead of ringing the bell
+    let mut recalled = shell.history.len();                                      //where the arrows are in the history, len() means "the fresh line"
+
 
     enable_raw_mode().ok()?;
 
@@ -37,6 +39,27 @@ pub fn read_line(shell: &Shell) -> Option<String> {
             }
             KeyCode::Tab => {
                 handle_tab(shell, &mut buffer, &mut last_was_tab);
+            }
+            //the arrows walk through the history and rewrite the line
+            KeyCode::Up => {
+                if recalled > 0 {
+                    recalled -= 1;
+                    buffer = shell.history[recalled].clone();
+                    redraw(&buffer);
+                }
+                last_was_tab = false;
+            }
+            KeyCode::Down => {
+                if recalled < shell.history.len() {
+                    recalled += 1;
+                    //past the last entry, the line goes back to being empty
+                    buffer = match shell.history.get(recalled) {
+                        Some(entry) => entry.clone(),
+                        None => String::new(),
+                    };
+                    redraw(&buffer);
+                }
+                last_was_tab = false;
             }
             KeyCode::Backspace => {
                 if buffer.pop().is_some() {
@@ -107,6 +130,12 @@ fn handle_tab(shell: &Shell, buffer: &mut String, last_was_tab: &mut bool) {
         show(&format!("\r\n{}\r\n{PROMPT}{buffer}", names.join("  ")));
         *last_was_tab = false;
     }
+}
+
+//rewrite the whole line: back to column 0, erase to the end, prompt, content
+//"\x1b[K" is the escape sequence terminals understand as "clear to end of line"
+fn redraw(buffer: &str) {
+    show(&format!("\r\x1b[K{PROMPT}{buffer}"));
 }
 
 //wait for a key press, ignoring anything else the terminal reports

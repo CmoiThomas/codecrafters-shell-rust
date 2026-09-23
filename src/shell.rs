@@ -12,6 +12,9 @@ pub struct Shell {
 
     //commands started with "&", ordered by job number
     pub jobs: Vec<Job>,
+
+    //every command line entered, oldest first
+    pub history: Vec<String>,
 }
 
 impl Shell {
@@ -19,6 +22,7 @@ impl Shell {
         Shell {
             completers: HashMap::new(),
             jobs: Vec::new(),
+            history: Vec::new(),
         }
     }
 }
