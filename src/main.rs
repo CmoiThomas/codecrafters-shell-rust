@@ -1,6 +1,7 @@
 mod builtins;
 mod completion;
 mod exec;
+mod history;
 mod input;
 mod jobs;
 mod parser;
@@ -17,11 +18,15 @@ use shell::Shell;
 
 fn main() {
     let mut shell = Shell::new();
+    history::load_at_startup(&mut shell);                                        //HISTFILE, when it is set, fills the history before the first prompt
 
     loop {
         jobs::report(&mut shell.jobs, &mut io::stdout(), false);                 //announce the background jobs that finished since the last prompt
 
-        let Some(line) = read_line(&shell) else { break };                       //None means end of input (Ctrl+D on an empty line)
+        let Some(line) = read_line(&shell) else {                                //None means end of input (Ctrl+D on an empty line)
+            history::save_at_exit(&mut shell);
+            break;
+        };
 
         //the line is remembered before it runs, so "history" can list itself
         let entry = line.trim();

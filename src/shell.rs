@@ -15,6 +15,9 @@ pub struct Shell {
 
     //every command line entered, oldest first
     pub history: Vec<String>,
+
+    //how many history entries have already been written to the history file
+    pub appended: usize,
 }
 
 impl Shell {
@@ -23,6 +26,7 @@ impl Shell {
             completers: HashMap::new(),
             jobs: Vec::new(),
             history: Vec::new(),
+            appended: 0,
         }
     }
 }

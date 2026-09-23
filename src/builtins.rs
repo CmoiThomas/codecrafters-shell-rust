@@ -4,6 +4,7 @@ use std::env;
 use std::io::Write;
 
 use crate::exec::find_in_path;
+use crate::history;
 use crate::jobs;
 use crate::shell::Shell;
 
@@ -36,7 +37,9 @@ pub fn is_builtin(name: &str) -> bool {
     find(name).is_some()
 }
 
-fn exit_command(_shell: &mut Shell, args: &[&str], _out: &mut dyn Write, _err: &mut dyn Write) {
+fn exit_command(shell: &mut Shell, args: &[&str], _out: &mut dyn Write, _err: &mut dyn Write) {
+    history::save_at_exit(shell);                                                //the session is over, HISTFILE gets what happened in it
+
     //"exit" alone means "exit 0", and so does an argument that is not a number
     let code = match args.first() {
         Some(arg) => arg.parse::<i32>().unwrap_or(0),
@@ -116,8 +119,34 @@ fn jobs_command(shell: &mut Shell, _args: &[&str], out: &mut dyn Write, _err: &m
     jobs::report(&mut shell.jobs, out, true);
 }
 
-//list the commands entered so far, or only the last n of them with "history <n>"
-fn history_command(shell: &mut Shell, args: &[&str], out: &mut dyn Write, _err: &mut dyn Write) {
+//manage the command history
+//  history           list everything, "history <n>" only the last n entries
+//  history -r <file> add the lines of a file to the history
+//  history -w <file> write the whole history to a file, replacing its contents
+//  history -a <file> add to a file the commands entered since the last append
+fn history_command(shell: &mut Shell, args: &[&str], out: &mut dyn Write, err: &mut dyn Write) {
+    match args {
+        ["-r", path] => {
+            if history::read_file(shell, path).is_err() {
+                writeln!(err, "history: {path}: cannot read file").ok();
+            }
+        }
+        ["-w", path] => {
+            if history::write_file(shell, path).is_err() {
+                writeln!(err, "history: {path}: cannot write file").ok();
+            }
+        }
+        ["-a", path] => {
+            if history::append_file(shell, path).is_err() {
+                writeln!(err, "history: {path}: cannot write file").ok();
+            }
+        }
+        _ => list_history(shell, args, out),
+    }
+}
+
+//show the history, or only its last entries when a count is given
+fn list_history(shell: &Shell, args: &[&str], out: &mut dyn Write) {
     //the entry number shown is its position in the list, starting at 1
     let first = match args.first() {
         Some(arg) => match arg.parse::<usize>() {
